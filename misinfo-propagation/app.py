@@ -28,6 +28,7 @@ from src.graph_builder import load_graph
 from src.centrality import compute_centralities
 from src.epidemic_model import run_sir, run_sis, peak_infected
 from src.immunization import apply_strategy, benchmark_strategies, STRATEGIES
+from src.detection import train_detector, generate_node_texts, classify_nodes, detection_summary
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
@@ -1012,6 +1013,170 @@ if run_button:
         plot_community_heatmap(G, final_state_b, _node_comm),
         use_container_width=True,
     )
+
+    # ── NLP MISINFORMATION CLASSIFICATION (full width) ───────────────────────
+    st.markdown(
+        "<hr style='border-color:#1e293b; margin:1.5rem 0;'/>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<h2 style='background:linear-gradient(90deg,#f59e0b,#ef4444);"
+        "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+        "font-weight:700;'>🤖 NLP Misinformation Classification</h2>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='color:#64748b;'>Each node is assigned synthetic text content and "
+        "classified as <b style='color:#ef4444;'>FAKE</b> or <b style='color:#22c55e;'>REAL</b> "
+        "using a <b>TF-IDF + Logistic Regression</b> pipeline trained on a labelled corpus.</p>",
+        unsafe_allow_html=True,
+    )
+
+    with st.spinner("🤖 Training NLP classifier and classifying nodes …"):
+        _nlp_pipeline  = train_detector(verbose=False)
+        _node_texts    = generate_node_texts(G, fake_fraction=0.35)
+        _node_labels   = classify_nodes(G, _nlp_pipeline, _node_texts)
+        _det_summary   = detection_summary(_node_labels)
+
+    # ── Top metrics row ───────────────────────────────────────────────────
+    _nlp_m1, _nlp_m2, _nlp_m3, _nlp_m4 = st.columns(4)
+    _nlp_m1.metric("Total Nodes Classified", f"{_det_summary['total']:,}")
+    _nlp_m2.metric(
+        "🔴 FAKE Nodes",
+        f"{_det_summary['fake']:,}",
+        delta=f"{_det_summary['fake_pct']:.1f}% of network",
+        delta_color="inverse",
+    )
+    _nlp_m3.metric(
+        "🟢 REAL Nodes",
+        f"{_det_summary['real']:,}",
+        delta=f"{_det_summary['real_pct']:.1f}% of network",
+        delta_color="normal",
+    )
+    # Fake influencers — nodes in top-20 by degree labelled FAKE
+    _top_degree_nodes = centrality_df.sort_values("degree", ascending=False).head(20).index.tolist()
+    _fake_influencers = [n for n in _top_degree_nodes if _node_labels.get(n) == "FAKE"]
+    _nlp_m4.metric(
+        "⚠️ Fake Influencers (Top-20)",
+        f"{len(_fake_influencers)}",
+        delta=f"out of top-20 by degree",
+        delta_color="inverse" if _fake_influencers else "normal",
+    )
+
+    st.markdown("<br/>", unsafe_allow_html=True)
+
+    # ── Donut chart + Node table side by side ────────────────────────────
+    _nlp_chart_col, _nlp_table_col = st.columns([4, 6], gap="large")
+
+    with _nlp_chart_col:
+        _donut = go.Figure(go.Pie(
+            labels=["FAKE", "REAL"],
+            values=[_det_summary["fake"], _det_summary["real"]],
+            hole=0.62,
+            marker=dict(
+                colors=["#ef4444", "#22c55e"],
+                line=dict(color="#0d1117", width=3),
+            ),
+            textfont=dict(color="#e2e8f0", size=13),
+            hovertemplate="%{label}: %{value:,} nodes (%{percent})<extra></extra>",
+        ))
+        _donut.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e2e8f0", family="Inter, sans-serif"),
+            showlegend=True,
+            legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="#334155", borderwidth=1,
+                        font=dict(size=13)),
+            margin=dict(l=10, r=10, t=40, b=10),
+            height=300,
+            annotations=[dict(
+                text=f"<b>{_det_summary['fake_pct']:.1f}%</b><br>FAKE",
+                x=0.5, y=0.5, font_size=18, showarrow=False,
+                font=dict(color="#ef4444"),
+            )],
+            title=dict(text="Node Classification Split", font=dict(size=14, color="#f1f5f9")),
+        )
+        st.plotly_chart(_donut, use_container_width=True)
+
+    with _nlp_table_col:
+        st.markdown("##### 📋 Classified Node Sample")
+        _label_filter = st.radio(
+            "Filter by label",
+            options=["ALL", "FAKE", "REAL"],
+            horizontal=True,
+            key="nlp_label_filter",
+        )
+        # Build display dataframe
+        _rows = []
+        for _node, _lbl in list(_node_labels.items())[:500]:  # cap at 500 for display
+            if _label_filter == "ALL" or _lbl == _label_filter:
+                _rows.append({
+                    "Node ID": _node,
+                    "Label": _lbl,
+                    "Content": _node_texts.get(_node, ""),
+                })
+        _node_df = pd.DataFrame(_rows[:150])  # show max 150 rows in table
+        if not _node_df.empty:
+            def _colour_label(v):
+                if v == "FAKE":
+                    return "background-color:#3d1515; color:#ef4444; font-weight:600"
+                return "background-color:#0f2d1f; color:#22c55e; font-weight:600"
+            st.dataframe(
+                _node_df.style.applymap(_colour_label, subset=["Label"]),
+                use_container_width=True,
+                height=300,
+            )
+        else:
+            st.info("No nodes match the selected filter.")
+
+    # ── Live interactive classifier ───────────────────────────────────────
+    st.markdown("<br/>", unsafe_allow_html=True)
+    st.markdown(
+        "<h4 style='color:#f1f5f9;'>🔬 Live Text Classifier</h4>"
+        "<p style='color:#64748b; margin-top:-0.5rem;'>Type any headline or claim below "
+        "and get an instant FAKE / REAL prediction with confidence score.</p>",
+        unsafe_allow_html=True,
+    )
+    _live_col1, _live_col2 = st.columns([7, 3], gap="large")
+    with _live_col1:
+        _user_text = st.text_area(
+            "Enter text to classify",
+            placeholder="e.g. Scientists confirm 5G towers cause COVID-19 spread …",
+            height=100,
+            key="nlp_live_input",
+            label_visibility="collapsed",
+        )
+    with _live_col2:
+        st.markdown("<br/>", unsafe_allow_html=True)
+        _classify_btn = st.button("⚡ Classify", type="primary", use_container_width=True, key="nlp_classify_btn")
+
+    if _classify_btn and _user_text.strip():
+        import numpy as np
+        _proba = _nlp_pipeline.predict_proba([_user_text.strip()])[0]  # [P(REAL), P(FAKE)]
+        _pred_idx = int(_nlp_pipeline.predict([_user_text.strip()])[0])
+        _pred_label = "FAKE" if _pred_idx == 1 else "REAL"
+        _confidence = _proba[_pred_idx] * 100
+        _colour = "#ef4444" if _pred_label == "FAKE" else "#22c55e"
+        _icon   = "🔴" if _pred_label == "FAKE" else "🟢"
+        st.markdown(
+            f"""
+            <div style='padding:1.2rem 1.5rem; border-radius:12px;
+                        border:1px solid {_colour}40;
+                        background:linear-gradient(135deg,{_colour}15,{_colour}05);
+                        margin-top:0.5rem;'>
+                <span style='font-size:1.8rem;'>{_icon}</span>
+                <span style='font-size:1.5rem; font-weight:700; color:{_colour};
+                             margin-left:0.5rem;'>{_pred_label}</span>
+                <span style='color:#94a3b8; margin-left:1rem;'>Confidence: 
+                    <b style='color:{_colour};'>{_confidence:.1f}%</b></span>
+                <p style='color:#94a3b8; margin:0.6rem 0 0; font-size:0.9rem;'>
+                    P(REAL) = {_proba[0]*100:.1f}% &nbsp;|&nbsp; P(FAKE) = {_proba[1]*100:.1f}%
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    elif _classify_btn:
+        st.warning("Please enter some text to classify.")
 
 else:
     # ── Landing placeholder ────────────────────────────────────────────────

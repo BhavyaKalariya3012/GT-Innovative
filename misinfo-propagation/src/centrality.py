@@ -88,6 +88,41 @@ def compute_centralities(G: nx.DiGraph, k: int = 500) -> pd.DataFrame:
     return df
 
 
+def top_influencers(df: pd.DataFrame, k: int = 10) -> pd.DataFrame:
+    """Return and print the top-K influential nodes ranked by composite score.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Output of :func:`compute_centralities` (already sorted by composite).
+    k : int
+        Number of top nodes to return. Default is 10.
+
+    Returns
+    -------
+    pd.DataFrame
+        Subset of *df* containing the top-K rows.
+
+    Prints
+    ------
+    Formatted list::
+
+        Top Influencers:
+        Node 12345 → Score 0.8731
+        ...
+    """
+    top_k = df.head(k)
+    print(f"\n{'='*45}")
+    print(f"  🎯 Top {k} Influencers (by Composite Score)")
+    print(f"{'='*45}")
+    for node, row in top_k.iterrows():
+        print(f"  Node {node:>10} → Score {row['composite']:.4f}  "
+              f"[deg={row['degree']:.3f}  pr={row['pagerank']:.4f}  "
+              f"btw={row['betweenness']:.4f}]")
+    print(f"{'='*45}\n")
+    return top_k
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
